@@ -62,7 +62,7 @@ class SoapApiService {
         // ทำการยิง cURL ไปหา API จริง
         $response = curl_exec($ch);
         if (curl_errno($ch)) {
-            error_log('cURL Error: ' . curl_error($ch));
+            error_log('cURL Error: Connection failed (ref: ' . time() . ')');
             curl_close($ch);
             return ['error' => 'Connection failed'];
         }
@@ -109,7 +109,7 @@ class SoapApiService {
         // ทำการยิง cURL ไปหา API จริง
         $response = curl_exec($ch);
         if (curl_errno($ch)) {
-            error_log('cURL Error: ' . curl_error($ch));
+            error_log('cURL Error: Connection failed (ref: ' . time() . ')');
             curl_close($ch);
             return ['error' => 'Connection failed'];
         }
@@ -127,9 +127,14 @@ class SoapApiService {
     }
     $use_errors = libxml_use_internal_errors(true);
 
-    $xml = simplexml_load_string($xmlString, 'SimpleXMLElement', LIBXML_NOCDATA);
+    // [Security] Prevent XXE attacks - disable external entities and DTD processing
+    $xml = simplexml_load_string(
+        $xmlString, 
+        'SimpleXMLElement', 
+        LIBXML_NOCDATA | LIBXML_NOENT | LIBXML_NONET
+    );
     if ($xml === false) {
-        error_log('XML Parse Error: ' . print_r(libxml_get_errors(), true));
+        error_log('XML Parse Error');
         libxml_clear_errors();
         return null;
     }
@@ -236,6 +241,8 @@ function checkLogin() {
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         "Authorization: Bearer $token"
     ]);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
     curl_exec($ch);
     $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
@@ -286,6 +293,8 @@ function callApi($url, $method = 'GET', $data = []) {
 
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
     $response = curl_exec($ch);
     $err = curl_error($ch);
@@ -293,7 +302,7 @@ function callApi($url, $method = 'GET', $data = []) {
     curl_close($ch);
 
     if ($err) {
-        return ['status' => 'error', 'message' => 'cURL Error: ' . $err, 'data' => []];
+        return ['status' => 'error', 'message' => 'cURL Error: Connection failed', 'data' => []];
     }
     
     // Check for HTTP errors (e.g., 4xx or 5xx) that might not return a JSON body
@@ -325,7 +334,7 @@ function callApi($url, $method = 'GET', $data = []) {
         if (trim($response) === '' && $http_code < 400) {
             return ['status' => 'success', 'message' => 'Operation successful, no content returned.', 'data' => []];
         }
-        return ['status' => 'error', 'message' => 'Invalid JSON response: ' . $response, 'data' => []];
+        return ['status' => 'error', 'message' => 'Invalid JSON response', 'data' => []];
     }
 
     // Default return path for successful JSON response
@@ -439,7 +448,10 @@ function callApiV2($url, $expected_token, $method = 'GET', $params = null) {
     ]);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    // [Security FIX] Enable SSL verification instead of disabling it
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+    
     if (!empty($params)) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($params));
     }
@@ -450,7 +462,7 @@ function callApiV2($url, $expected_token, $method = 'GET', $params = null) {
     curl_close($ch);
 
     if ($err) {
-        throw new Exception('cURL Error: ' . $err);
+        throw new Exception('Request failed');
     }
 
     if ($http_code >= 400) {
@@ -460,21 +472,6 @@ function callApiV2($url, $expected_token, $method = 'GET', $params = null) {
     }
 
     $data = json_decode($response, true);
-
-    // if (json_last_error() !== JSON_ERROR_NONE) {
-    //     if (trim($response) === '' && $http_code < 400) {
-    //         return [
-    //             'status' => 'success',
-    //             'message' => 'Operation successful, no content returned.',
-    //             'data' => []
-    //         ];
-    //     }
-    //     return [
-    //         'status' => 'error',
-    //         'message' => 'Invalid JSON response: ' . $response,
-    //         'data' => []
-    //     ];
-    // }
 
     return $data;
 }
@@ -508,5 +505,15 @@ function requireRole(int $maxPriority, string $msg = 'Access denied') {
 }
 function e($str) {
     return htmlspecialchars((string)$str, ENT_QUOTES, 'UTF-8');
+}
+
+// [Security] Helper function to validate and sanitize redirects
+function isValidRedirect($url) {
+    // Only allow relative URLs starting with /
+    if (strpos($url, '/') === 0 && strpos($url, '//') !== 0) {
+        // Check if it's a valid path
+        return preg_match('#^/[a-zA-Z0-9_./%-]*\.php(\?[a-zA-Z0-9_=&%-]*)?$#', $url);
+    }
+    return false;
 }
 ?>
