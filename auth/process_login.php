@@ -39,9 +39,11 @@ curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
 
-
 curl_setopt($ch, CURLOPT_TIMEOUT, 30);
 
+// [Security Fix] Checkmarx Requirement: บังคับตรวจจับ SSL Certificate (ป้องกัน Man-in-the-Middle)
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true); 
+curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
 $response = curl_exec($ch);
 $status_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
