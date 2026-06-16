@@ -1,9 +1,10 @@
 <?php
 require_once $_SERVER['DOCUMENT_ROOT'].'/function.php';
 checkLogin();
+
 $token = isset($_COOKIE["token"]) ? $_COOKIE["token"] : null;
 $userlogin = isset($_SESSION["user_data"]) ? $_SESSION["user_data"] : null;
-$redirectUrl = 'schedule.php';
+$redirectUrl = 'schedule.php'; // Default fallback
 
 // =========================================================================
 // --- CONFIGURATIONS (ต้องตรงกับหน้า Swap) ---
@@ -18,17 +19,23 @@ if (!isset($_POST['csrf_token'], $_SESSION['csrf_token']) || !hash_equals($_SESS
     die("Error: Invalid CSRF token!");
 }
 
-$noprocess = true;
-$redirect_message = true;
-$manage_mode = $_POST['manage_mode'] ?? '0';
+// [Security Fix] Input Validation & Sanitization
+$manage_mode = filter_input(INPUT_POST, 'manage_mode', FILTER_SANITIZE_NUMBER_INT) ?? '0';
 if ($manage_mode === '1' && !hasPermission('schedule.management')) {
     echo "Error: Access denied.\n"; exit;
 }
 
+$noprocess = true;
+$redirect_message = true;
+$status = '';
+$message = '';
+
+// [Security Fix] Sanitize strings
+$action = filter_input(INPUT_POST, 'action', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+$req = filter_input(INPUT_POST, 'req', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+$requester_schedule_status = filter_input(INPUT_POST, 'requester_schedule_status', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+
 $url = "";
-$action = $_POST['action'] ?? null;
-$req = $_POST['req'] ?? null; 
-$requester_schedule_status = $_POST['requester_schedule_status'] ?? null;
 
 $userMap = [];
 $userApiUrl = "/data/schedule"; 
@@ -37,7 +44,8 @@ if (isset($userApiData['data'])) {
     foreach ($userApiData['data'] as $u) {
         $fname = $u['thai_firstname'] ?? $u['eng_firstname'] ?? '-';
         $lname = $u['thai_lastname'] ?? $u['eng_lastname'] ?? '-';
-        $userMap[$u['user_id']] = trim("$fname");
+        // [Security Fix] Secure output map
+        $userMap[$u['user_id']] = trim(htmlspecialchars($fname, ENT_QUOTES, 'UTF-8'));
     }
 }
 
@@ -66,14 +74,12 @@ function check_time_overlap_and_rest($emp_id, $target_date, $new_start_sec, $new
     $target_ts = strtotime($target_date);
     $min_rest_sec = $check_rest ? ($min_rest_hours * 3600) : 0;
     
-    // Calculate Absolute Times for the New Shift
     $new_start_abs = $target_ts + $new_start_sec;
     $new_end_abs = $target_ts + $new_end_sec;
     if ($new_end_sec < $new_start_sec) { 
-        $new_end_abs += 86400; // Crosses midnight
+        $new_end_abs += 86400; 
     }
 
-    // 1. Check Overlap with PREVIOUS Day
     $prev_date = date('Y-m-d', strtotime('-1 day', $target_ts));
     if (isset($schedule_map[(string)$emp_id][$prev_date]) && $schedule_map[(string)$emp_id][$prev_date]['status'] === 'WORKING') {
         $prev_shift = $schedule_map[(string)$emp_id][$prev_date];
@@ -88,7 +94,6 @@ function check_time_overlap_and_rest($emp_id, $target_date, $new_start_sec, $new
         if ($check_rest && $prev_end_abs <= $new_start_abs && ($new_start_abs - $prev_end_abs) < $min_rest_sec) return true;
     }
 
-    // 2. Check Overlap with NEXT Day
     $next_date = date('Y-m-d', strtotime('+1 day', $target_ts));
     if (isset($schedule_map[(string)$emp_id][$next_date]) && $schedule_map[(string)$emp_id][$next_date]['status'] === 'WORKING') {
         $next_shift = $schedule_map[(string)$emp_id][$next_date];
@@ -109,7 +114,7 @@ $insertData = [];
 // ==========================================================================================
 // 1. ACTION: SWAP (Create Request)
 // ==========================================================================================
-if (isset($action) && $action === "swap") {
+if ($action === "swap") {
     $noprocess = false;
     $requester = getScheduleInfoFromPost('requester_schedule_id');
     $replace   = getScheduleInfoFromPost('target_schedule_id');
@@ -117,35 +122,35 @@ if (isset($action) && $action === "swap") {
     if (!$requester || !$replace) {
         $noprocess = true; $status = 'error'; $message = 'Invalid schedule data';
     } else {
-        $requesterSID = $requester['schedule_id'];
-        $requesterUID = $requester['user_id'];
-        $replaceSID   = $replace['schedule_id'];
-        $replaceUID   = $replace['user_id'];
+        $requesterSID = (int)$requester['schedule_id'];
+        $requesterUID = (int)$requester['user_id'];
+        $replaceSID   = (int)$replace['schedule_id'];
+        $replaceUID   = (int)$replace['user_id'];
         
-        // รับ comment ที่อาจมีชื่อคนติดเงื่อนไขต่อท้ายมาจากหน้า JS
-        $comment = $_POST['comment'] ?? " ";
-        $remark = $requester["thai_firstname"]." สลับกะ ".$replace["thai_firstname"]." | ".$comment ;
+        // [Security Fix] Sanitize comment
+        $raw_comment = $_POST['comment'] ?? " ";
+        $comment = htmlspecialchars(trim($raw_comment), ENT_QUOTES, 'UTF-8');
+        
+        $safe_req_fname = htmlspecialchars($requester["thai_firstname"] ?? '', ENT_QUOTES, 'UTF-8');
+        $safe_rep_fname = htmlspecialchars($replace["thai_firstname"] ?? '', ENT_QUOTES, 'UTF-8');
+        $remark = "{$safe_req_fname} สลับกะ {$safe_rep_fname} | {$comment}";
 
-        if ($requester_schedule_status == 'OT' && $manage_mode){
+        if ($requester_schedule_status === 'OT' && $manage_mode == 1){
             callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $replaceSID , "user_id" => 1, "status" => 'OT' ]);
             callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $requesterSID, "user_id" => $replaceUID, "status" => 'OT' ]);
             callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $replaceSID , "user_id" => $requesterUID, "status" => 'OT' ]);
             $status = 'success'; $message = 'OT Swap success. id : '.$requesterSID.' and '.$replaceSID;
         } else {
-            // Update Requester -> Pending
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $requesterSID, "status" => "Pending", "remark" => $remark  ]);
-
-            // Update Target -> Standby
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $replaceSID, "status" => "Standby", "remark" => $remark ]);
 
-            // Create Request
             $url = "/api/request?action=add";
             $insertData = [
                 "schedule_id"        => $requesterSID,
-                "target_schedule_id" => $replaceSID ?? null,
-                "request_type_id"    => 1, // Swap
+                "target_schedule_id" => $replaceSID,
+                "request_type_id"    => 1, 
                 "request_user_id"    => $requesterUID,
-                "user_replace_id"    => $replaceUID ?? null,
+                "user_replace_id"    => $replaceUID,
                 "request_reason"     => $comment,
                 "approver_user_id"   => $requester['approver_id'] ?? null, 
                 "request_status"     => "Pending"
@@ -157,71 +162,63 @@ if (isset($action) && $action === "swap") {
 // ==========================================================================================
 // 2. ACTION: LEAVE (Create Request)
 // ==========================================================================================
-elseif (isset($action) && $action === "leave"){
+elseif ($action === "leave"){
     $noprocess = false;
     $schInfo = getScheduleInfoFromPost('schedule_id');
-    $reqTInfoUrl = "/api/request_type?reqid=".$_POST["leave_type"];
+    
+    // [Security Fix] Integer casting
+    $leave_type = filter_input(INPUT_POST, 'leave_type', FILTER_VALIDATE_INT);
+    
+    $reqTInfoUrl = "/api/request_type?reqid=" . $leave_type;
     $reqTname = callApi($reqTInfoUrl);
     $reqTname = $reqTname["data"] ?? [];
 
     if ($schInfo) {
-        $comment = $_POST['comment'] ?? "Leave";
-        // Update schedule to Pending
+        // [Security Fix] XSS protection
+        $comment = isset($_POST['comment']) ? htmlspecialchars(trim($_POST['comment']), ENT_QUOTES, 'UTF-8') : "Leave";
+        $safe_req_type_name = htmlspecialchars($reqTname["request_type_name"] ?? 'Leave', ENT_QUOTES, 'UTF-8');
+        
         callApi("/schedule/monthschedule?action=change_status", "POST", [
-            "schedule_id" => $schInfo["schedule_id"],
+            "schedule_id" => (int)$schInfo["schedule_id"],
             "status"      => 'Pending',
-            "remark"      => ($reqTname["request_type_name"] ?? 'Leave') . " - รออนุมัติ | ".$comment
+            "remark"      => "{$safe_req_type_name} - รออนุมัติ | {$comment}"
         ]);
-        // echo "<pre>";
-        // print_r($_POST);
-        // print_r($subEmpId);
-        // echo "</pre>";
-        // exit;
 
-
-        // Create schedule for replace (if any)
-        $subEmpId = $_POST['substitute_emp_id'] ?? '';
+        $subEmpId = filter_input(INPUT_POST, 'substitute_emp_id', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?? '';
         $replaceUID = null;
         $target_schedule_id = null;
-        // echo "<pre>";
-        //     print_r($_POST);
-        //     print_r($subEmpId);
-        //     echo "</pre>";
-        //     exit;
+        
         if (!empty($subEmpId)) {
-            $userurl = "/data/".$_POST["substitute_emp_id"];
-            $replaceInfo =  callApi($userurl);
+            $userurl = "/data/" . urlencode($subEmpId);
+            $replaceInfo = callApi($userurl);
             $replaceUID = (int) ($replaceInfo['data'][0]['user_id'] ?? 0);
-            $replaceName = $replaceInfo["data"][0]["thai_firstname"] ?? 'Unknown';
             
-            $remark = $replaceName." Standby แทน".$schInfo["thai_firstname"]." ".($reqTname["request_type_name"] ?? '');
+            $safe_replaceName = htmlspecialchars($replaceInfo["data"][0]["thai_firstname"] ?? 'Unknown', ENT_QUOTES, 'UTF-8');
+            $safe_sch_fname = htmlspecialchars($schInfo["thai_firstname"] ?? '', ENT_QUOTES, 'UTF-8');
             
-            // Create Standby Schedule for Substitute
+            $remark = "{$safe_replaceName} Standby แทน{$safe_sch_fname} {$safe_req_type_name}";
+            
             $insertDataRep = [
                 'user_id'          => $replaceUID,
-                'work_group_id'    => $schInfo["work_group_id"] ?? NULL,
-                'work_schedule_id' => $schInfo["work_schedule_id"] ?? NULL, 
+                'work_group_id'    => (int)($schInfo["work_group_id"] ?? 0),
+                'work_schedule_id' => (int)($schInfo["work_schedule_id"] ?? 0), 
                 'schedule_date'    => $schInfo["schedule_date"],
                 'status'           => 'Standby',
                 'remark'           => $remark                                                
             ];
             callApi("/api/update/schedule", "POST", [$insertDataRep]);
             
-            // Get the newly created schedule ID
-            $scheduleUrl = "/schedule/monthschedule?user_id=" . (int)$replaceUID . "&schedule_date=" . urlencode($schInfo["schedule_date"]) . "&schedule_status=Standby";
+            $scheduleUrl = "/schedule/monthschedule?user_id=" . $replaceUID . "&schedule_date=" . urlencode($schInfo["schedule_date"]) . "&schedule_status=Standby";
             $response    = callApi($scheduleUrl);
             $target_schedule_id = $response["data"][0]["schedule_id"] ?? null;
-            
         }
 
-        // Add Request
-        
         $url = "/api/request?action=add";
         $insertData = [
-            "schedule_id"        => $schInfo["schedule_id"],
+            "schedule_id"        => (int)$schInfo["schedule_id"],
             "target_schedule_id" => $target_schedule_id, 
-            "request_type_id"    => $_POST["leave_type"],
-            "request_user_id"    => $schInfo["user_id"],
+            "request_type_id"    => $leave_type,
+            "request_user_id"    => (int)$schInfo["user_id"],
             "user_replace_id"    => !empty($replaceUID) ? $replaceUID : null,
             "request_reason"     => $comment,
             "approver_user_id"   => $schInfo["approver_id"] ?? null,
@@ -233,75 +230,64 @@ elseif (isset($action) && $action === "leave"){
 // ==========================================================================================
 // 3. REQ: CONFIRM (From Schedule Modal - by Target User/Substitute)
 // ==========================================================================================
-elseif (isset($req) && $req === "confirm"){
+elseif ($req === "confirm"){
     $noprocess = false;
-    $TargetSID = filter_input(INPUT_POST, "schedule_id", FILTER_VALIDATE_INT); // My ID (Standby)
+    $TargetSID = filter_input(INPUT_POST, "schedule_id", FILTER_VALIDATE_INT);
     
     $dataInput = [ "schedule_id" => $TargetSID ];
     $requestInfo = callApi("/api/request?action=gettarget", "POST", $dataInput);
     
     if (isset($requestInfo["data"][0])) {
         $reqData = $requestInfo["data"][0];
-        $requesterSID = $reqData["schedule_id"];
-        $targetSID = $reqData["target_schedule_id"]; 
-        $requesterUID = $reqData["request_user_id"];
-        $replaceUID   = $reqData["user_replace_id"];
-        $requestType  = $reqData["request_type_id"]; 
+        $requesterSID = (int)$reqData["schedule_id"];
+        $targetSID = (int)$reqData["target_schedule_id"]; 
+        $requesterUID = (int)$reqData["request_user_id"];
+        $replaceUID   = (int)$reqData["user_replace_id"];
+        $requestType  = (int)$reqData["request_type_id"]; 
         $requestUser = getUserName($requesterUID, $userMap);
         $targetUser = getUserName($replaceUID, $userMap);
 
-        if ($requestType == 1) { // SWAP
-            
-            // --- SIMULATE OVERLAP & REST ---
+        if ($requestType === 1) { 
             $needApproval = false;
-            
-            // 1. ดึงข้อมูลกะงานที่จะสลับ
             $reqSchApi = callApi("/schedule/monthschedule?schedule_id=" . $requesterSID);
             $tarSchApi = callApi("/schedule/monthschedule?schedule_id=" . $targetSID);
             
             if (isset($reqSchApi['data'][0], $tarSchApi['data'][0])) {
-                $rS = $reqSchApi['data'][0]; // Requester's Shift
-                $tS = $tarSchApi['data'][0]; // Target's Shift
+                $rS = $reqSchApi['data'][0];
+                $tS = $tarSchApi['data'][0];
                 
-                // 2. เช็คเงื่อนไขวันเดียวกัน (Same Day)
                 if ($rS['schedule_date'] == $tS['schedule_date']) {
                     $needApproval = true;
                 }
 
-                // 3. ถ้ายังไม่ติดเงื่อนไข -> เช็ค Overlap / Rest Time
                 if (!$needApproval) {
                      $sim_map = [];
-                     
-                     $dates_to_fetch = [
+                     $dates_to_fetch = array_unique([
                          $rS['schedule_date'], 
                          date('Y-m-d', strtotime($rS['schedule_date'] . ' -1 day')),
                          date('Y-m-d', strtotime($rS['schedule_date'] . ' +1 day')),
                          $tS['schedule_date'], 
                          date('Y-m-d', strtotime($tS['schedule_date'] . ' -1 day')),
                          date('Y-m-d', strtotime($tS['schedule_date'] . ' +1 day'))
-                     ];
-                     $dates_to_fetch = array_unique($dates_to_fetch);
+                     ]);
 
                      foreach($dates_to_fetch as $d) {
-                         $u1_res = callApi("/schedule/monthschedule?action=get&schedule_date=$d&user_id=$requesterUID");
+                         $safe_d = urlencode($d);
+                         $u1_res = callApi("/schedule/monthschedule?action=get&schedule_date=$safe_d&user_id=$requesterUID");
                          if (!empty($u1_res['data'])) {
                              foreach($u1_res['data'] as $item) {
                                  if ($item['schedule_id'] == $requesterSID) continue;
                                  $sim_map[(string)$item['employee_id']][$item['schedule_date']] = [
-                                     'status' => 'WORKING',
-                                     'start_time' => $item['start_time'],
-                                     'end_time' => $item['end_time']
+                                     'status' => 'WORKING', 'start_time' => $item['start_time'], 'end_time' => $item['end_time']
                                  ];
                              }
                          }
-                         $u2_res = callApi("/schedule/monthschedule?action=get&schedule_date=$d&user_id=$replaceUID");
+                         $u2_res = callApi("/schedule/monthschedule?action=get&schedule_date=$safe_d&user_id=$replaceUID");
                          if (!empty($u2_res['data'])) {
                              foreach($u2_res['data'] as $item) {
                                  if ($item['schedule_id'] == $targetSID) continue; 
                                  $sim_map[(string)$item['employee_id']][$item['schedule_date']] = [
-                                     'status' => 'WORKING',
-                                     'start_time' => $item['start_time'],
-                                     'end_time' => $item['end_time']
+                                     'status' => 'WORKING', 'start_time' => $item['start_time'], 'end_time' => $item['end_time']
                                  ];
                              }
                          }
@@ -322,44 +308,42 @@ elseif (isset($req) && $req === "confirm"){
             }
 
             if ($needApproval) {
-                // กรณี Overlap / Same Day 
-                // 1. อัปเดตตารางของ Target User เป็น Accept (ยินยอม)
                 callApi("/schedule/monthschedule?action=change_status", "POST", [ 
                     "schedule_id" => $TargetSID, 
                     "status" => "Accept", 
-                    "remark" => $reqData["request_reason"] // ใช้เหตุผลเดิม
+                    "remark" => $reqData["request_reason"] 
                 ]);
 
-                // 2. อัปเดต Request เป็น Pending (รอหัวหน้าอนุมัติ)
                 $url = "/api/request?action=update";
                 $insertData = [
-                    "request_id"           => $reqData["request_id"],
+                    "request_id"           => (int)$reqData["request_id"],
                     "user_replace_confirm" => 1,
                     "date_confirm"         => date("Y-m-d H:i:s"),
                     "request_status"       => "Pending" 
                 ];
             } else {
-                // กรณีปกติ (Clean Swap) -> สลับเลย
                 callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $TargetSID, "user_id" => 1, "status" => 'Normal' ]);
                 callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $requesterSID, "user_id" => $replaceUID, "status" => 'Normal' ]);
                 callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $TargetSID, "user_id" => $requesterUID, "status" => 'Normal' ]);
                 
                 $url = "/api/request?action=update";
                 $insertData = [
-                    "request_id"           => $reqData["request_id"],
+                    "request_id"           => (int)$reqData["request_id"],
                     "user_replace_confirm" => 1,
                     "date_confirm"         => date("Y-m-d H:i:s"),
                     "request_status"       => "Approved"
                 ];
             }
 
-        } else { // LEAVE (Substitute Confirm)
-            $remark = $targetUser." ทำ OT แทน ".$requestUser." ".$reqData['request_type_name']." (Accepted)";
+        } else { 
+            // [Security Fix] Encode before concat
+            $safe_reqTypeName = htmlspecialchars($reqData['request_type_name'] ?? '', ENT_QUOTES, 'UTF-8');
+            $remark = "{$targetUser} ทำ OT แทน {$requestUser} {$safe_reqTypeName} (Accepted)";
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => "Accept", "remark" => $remark]);
 
             $url = "/api/request?action=update";
             $insertData = [
-                "request_id"           => $reqData["request_id"],
+                "request_id"           => (int)$reqData["request_id"],
                 "user_replace_confirm" => 1,
                 "date_confirm"         => date("Y-m-d H:i:s")
             ];
@@ -370,80 +354,83 @@ elseif (isset($req) && $req === "confirm"){
 // ==========================================================================================
 // 4. REQ: REJECT (From Schedule Modal - by Target User/Substitute)
 // ==========================================================================================
-elseif (isset($req) && $req === "reject"){
+elseif ($req === "reject"){
     $noprocess = false;
     $TargetSID = filter_input(INPUT_POST, "schedule_id", FILTER_VALIDATE_INT);
     $dataInput = [ "schedule_id" => $TargetSID ];
     $requestInfo = callApi("/api/request?action=gettarget", "POST", $dataInput);
     if (isset($requestInfo["data"][0])) {
         $reqData = $requestInfo["data"][0];
-        $requesterSID = $reqData["schedule_id"];
-        $requestType  = $reqData["request_type_id"];
+        $requesterSID = (int)$reqData["schedule_id"];
+        $requestType  = (int)$reqData["request_type_id"];
         callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $requesterSID, "status" => 'Normal', "remark" => '' ]);
-        if ($requestType == 1) { 
+        if ($requestType === 1) { 
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $TargetSID, "status" => 'Normal', "remark" => '' ]);
         } else { 
             callApi("/schedule/monthschedule?action=delete&schedule_id=" . $TargetSID, "DELETE");
         }
         $url = "/api/request?action=update";
-        $insertData = [ "request_id" => $reqData["request_id"], "request_status" => "Rejected" ];
+        $insertData = [ "request_id" => (int)$reqData["request_id"], "request_status" => "Rejected" ];
     }
 }
+
 // ==========================================================================================
 // 5. REQ: CANCEL (From Schedule Modal - by Requester)
 // ==========================================================================================
-elseif (isset($req) && $req === "cancel"){
+elseif ($req === "cancel"){
     $noprocess = false;
     $schedule_id = filter_input(INPUT_POST, "schedule_id", FILTER_VALIDATE_INT); 
     $dataInput = [ "schedule_id" => $schedule_id ];
     $requestInfo = callApi("/api/request?action=getinfo", "POST", $dataInput);
     if (isset($requestInfo["data"][0])) {
         $reqData = $requestInfo["data"][0];
-        $target_schedule_id = $reqData["target_schedule_id"] ?? null;
-        $requestType = $reqData["request_type_id"];
+        $target_schedule_id = (int)($reqData["target_schedule_id"] ?? 0);
+        $requestType = (int)$reqData["request_type_id"];
         callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $schedule_id, "status" => 'Normal', "remark" => '' ]);
         if (!empty($target_schedule_id)){
-            if ($requestType == 1) { 
+            if ($requestType === 1) { 
                 callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $target_schedule_id, "status" => 'Normal', "remark" => '' ]);
             } else { 
                 callApi("/schedule/monthschedule?action=delete&schedule_id=" . $target_schedule_id, "DELETE");
             }
         }       
         $url = "/api/request?action=update";
-        $insertData = [ "request_id" => $reqData["request_id"], "request_status" => "Canceled" ];  
+        $insertData = [ "request_id" => (int)$reqData["request_id"], "request_status" => "Canceled" ];  
     }
 }
+
 // ==========================================================================================
 // 6. ACTION: API ACTION (From Request Board / Datatable / API calls)
 // ==========================================================================================
-elseif (isset($action) && $action === "api_action") {
+elseif ($action === "api_action") {
     $noprocess = false;
     $reqID = filter_input(INPUT_POST, "request_id", FILTER_VALIDATE_INT);
-    $reqAction = $_POST['request_action'] ?? '';
+    $reqAction = filter_input(INPUT_POST, 'request_action', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?? '';
     $reqInfoApi = callApi("/api/request?action=getinfo&request_id=" . $reqID); 
     $reqData = $reqInfoApi['data'][0] ?? null;
     
     if ($reqData) {
-        $requesterSID = $reqData['schedule_id'];
-        $targetSID    = $reqData['target_schedule_id'];
-        $requestType  = $reqData['request_type_id'];
-        $requestUser = getUserName($reqData['request_user_id'], $userMap);
-        $targetUser = getUserName($reqData['user_replace_id'], $userMap);
-        $comment = $reqData['request_reason'];
+        $requesterSID = (int)$reqData['schedule_id'];
+        $targetSID    = (int)($reqData['target_schedule_id'] ?? 0);
+        $requestType  = (int)$reqData['request_type_id'];
+        $requestUser  = getUserName($reqData['request_user_id'], $userMap);
+        $targetUser   = getUserName($reqData['user_replace_id'], $userMap);
+        $comment      = htmlspecialchars($reqData['request_reason'] ?? '', ENT_QUOTES, 'UTF-8');
+        $safe_reqTypeName = htmlspecialchars($reqData['request_type_name'] ?? '', ENT_QUOTES, 'UTF-8');
         
         if ($reqAction === 'approve') { 
             $url = "/api/request?action=update";
-            $insertData = [ "request_id" => $reqID, "request_status" => "Approved", "date_approve" => date("Y-m-d H:i:s"), "approver_user_id" => $reqData['approver_user_id'] ];
-            if ($requestType == 1) { 
-                $replaceUID = $reqData["user_replace_id"];
-                $requesterUID = $reqData["request_user_id"];
+            $insertData = [ "request_id" => $reqID, "request_status" => "Approved", "date_approve" => date("Y-m-d H:i:s"), "approver_user_id" => (int)($reqData['approver_user_id'] ?? 0) ];
+            if ($requestType === 1) { 
+                $replaceUID = (int)$reqData["user_replace_id"];
+                $requesterUID = (int)$reqData["request_user_id"];
                 callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $requesterSID, "user_id" => $replaceUID, "status" => 'Normal' ]);
                 callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $targetSID, "user_id" => $requesterUID, "status" => 'Normal' ]);
             } else { 
-                $remark = $requestUser . " " . $reqData['request_type_name'].($targetSID ? " {$targetUser}ทำ OT แทน | ".$comment  : "");
+                $remark = "{$requestUser} {$safe_reqTypeName}" . ($targetSID ? " {$targetUser}ทำ OT แทน | {$comment}" : "");
                 callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $requesterSID, "status" => 'Requested', "remark" => $remark]);
                 if ($targetSID) {
-                    callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => 'OT', "remark" => "{$targetUser} ทำ OT แทน {$requestUser} {$reqData['request_type_name']}" ]);
+                    callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => 'OT', "remark" => "{$targetUser} ทำ OT แทน {$requestUser} {$safe_reqTypeName}" ]);
                 }
             }
             $redirectUrl = 'request_board.php';
@@ -451,68 +438,60 @@ elseif (isset($action) && $action === "api_action") {
         } elseif ($reqAction === 'reject' || $reqAction === 'cancel') { 
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $requesterSID, "status" => 'Normal', "remark" => '' ]);
             if ($targetSID) {
-                if ($requestType == 1) { callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => 'Normal', "remark" => '' ]);
+                if ($requestType === 1) { callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => 'Normal', "remark" => '' ]);
                 } else { callApi("/schedule/monthschedule?action=delete&schedule_id=" . $targetSID, "DELETE"); }
             }
             $statusStr = ($reqAction === 'cancel') ? 'Canceled' : 'Rejected';
             $url = "/api/request?action=update";
             $insertData = [ "request_id" => $reqID, "request_status" => $statusStr ];
-            if ($reqAction === 'reject') { $insertData['approver_user_id'] = $userlogin['user_id']; $insertData['date_approve'] = date("Y-m-d H:i:s"); }
+            if ($reqAction === 'reject') { $insertData['approver_user_id'] = (int)$userlogin['user_id']; $insertData['date_approve'] = date("Y-m-d H:i:s"); }
             $redirectUrl = 'request_board.php';
             
         } elseif ($reqAction === 'confirm_replace') {
-            // Logic เดียวกับ $req === "confirm"
-            if ($requestType == 1) { // SWAP
+            if ($requestType === 1) { 
                 $needApproval = false;
                 
-                // 1. ดึงข้อมูลกะงานที่จะสลับ
                 $reqSchApi = callApi("/schedule/monthschedule?schedule_id=" . $requesterSID);
                 $tarSchApi = callApi("/schedule/monthschedule?schedule_id=" . $targetSID);
                 
                 if (isset($reqSchApi['data'][0], $tarSchApi['data'][0])) {
                     $rS = $reqSchApi['data'][0];
                     $tS = $tarSchApi['data'][0];
-                    $requesterUID = $reqData["request_user_id"];
-                    $replaceUID   = $reqData["user_replace_id"];
+                    $requesterUID = (int)$reqData["request_user_id"];
+                    $replaceUID   = (int)$reqData["user_replace_id"];
                     
-                    // 2. เช็คเงื่อนไขวันเดียวกัน (Same Day)
                     if ($rS['schedule_date'] == $tS['schedule_date']) {
                         $needApproval = true;
                     }
 
-                    // 3. ถ้ายังไม่ติดเงื่อนไข -> เช็ค Overlap / Rest Time
                     if (!$needApproval) {
                          $sim_map = [];
-                         $dates_to_fetch = [
+                         $dates_to_fetch = array_unique([
                              $rS['schedule_date'], 
                              date('Y-m-d', strtotime($rS['schedule_date'] . ' -1 day')),
                              date('Y-m-d', strtotime($rS['schedule_date'] . ' +1 day')),
                              $tS['schedule_date'], 
                              date('Y-m-d', strtotime($tS['schedule_date'] . ' -1 day')),
                              date('Y-m-d', strtotime($tS['schedule_date'] . ' +1 day'))
-                         ];
-                         $dates_to_fetch = array_unique($dates_to_fetch);
+                         ]);
 
                          foreach($dates_to_fetch as $d) {
-                             $u1_res = callApi("/schedule/monthschedule?action=get&schedule_date=$d&user_id=$requesterUID");
+                             $safe_d = urlencode($d);
+                             $u1_res = callApi("/schedule/monthschedule?action=get&schedule_date=$safe_d&user_id=$requesterUID");
                              if (!empty($u1_res['data'])) {
                                  foreach($u1_res['data'] as $item) {
                                      if ($item['schedule_id'] == $requesterSID) continue;
                                      $sim_map[(string)$item['employee_id']][$item['schedule_date']] = [
-                                         'status' => 'WORKING',
-                                         'start_time' => $item['start_time'],
-                                         'end_time' => $item['end_time']
+                                         'status' => 'WORKING', 'start_time' => $item['start_time'], 'end_time' => $item['end_time']
                                      ];
                                  }
                              }
-                             $u2_res = callApi("/schedule/monthschedule?action=get&schedule_date=$d&user_id=$replaceUID");
+                             $u2_res = callApi("/schedule/monthschedule?action=get&schedule_date=$safe_d&user_id=$replaceUID");
                              if (!empty($u2_res['data'])) {
                                  foreach($u2_res['data'] as $item) {
                                      if ($item['schedule_id'] == $targetSID) continue; 
                                      $sim_map[(string)$item['employee_id']][$item['schedule_date']] = [
-                                         'status' => 'WORKING',
-                                         'start_time' => $item['start_time'],
-                                         'end_time' => $item['end_time']
+                                         'status' => 'WORKING', 'start_time' => $item['start_time'], 'end_time' => $item['end_time']
                                      ];
                                  }
                              }
@@ -536,7 +515,7 @@ elseif (isset($action) && $action === "api_action") {
                     callApi("/schedule/monthschedule?action=change_status", "POST", [ 
                         "schedule_id" => $targetSID, 
                         "status" => "Accept", 
-                        "remark" => $reqData["request_reason"] 
+                        "remark" => $comment 
                     ]);
 
                     $url = "/api/request?action=update";
@@ -547,8 +526,8 @@ elseif (isset($action) && $action === "api_action") {
                         "request_status"       => "Pending" 
                     ];
                 } else {
-                    $replaceUID = $reqData["user_replace_id"];
-                    $requesterUID = $reqData["request_user_id"];
+                    $replaceUID = (int)$reqData["user_replace_id"];
+                    $requesterUID = (int)$reqData["request_user_id"];
 
                     callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $targetSID, "user_id" => 1, "status" => 'Normal' ]);
                     callApi("/schedule/monthschedule?action=confirm_swap", "POST", [ "schedule_id" => $requesterSID, "user_id" => $replaceUID, "status" => 'Normal' ]);
@@ -563,8 +542,8 @@ elseif (isset($action) && $action === "api_action") {
                     ];
                 }
 
-            } else { // LEAVE
-                $remark = $targetUser." ทำ OT แทน ".$requestUser." ".$reqData['request_type_name']." (Accepted)";
+            } else { 
+                $remark = "{$targetUser} ทำ OT แทน {$requestUser} {$safe_reqTypeName} (Accepted)";
                 callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => "Accept", "remark" => $remark]);
 
                 $url = "/api/request?action=update";
@@ -577,9 +556,8 @@ elseif (isset($action) && $action === "api_action") {
             $redirectUrl = 'request_board.php';
             
         } elseif ($reqAction === 'reject_replace') {
-            // Logic เดียวกับ $req === "reject"
             callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $requesterSID, "status" => 'Normal', "remark" => '' ]);
-            if ($requestType == 1) { 
+            if ($requestType === 1) { 
                 callApi("/schedule/monthschedule?action=change_status", "POST", [ "schedule_id" => $targetSID, "status" => 'Normal', "remark" => '' ]);
             } else { 
                 callApi("/schedule/monthschedule?action=delete&schedule_id=" . $targetSID, "DELETE");
@@ -595,41 +573,49 @@ elseif (isset($action) && $action === "api_action") {
         }
     }
 }
-elseif ($_POST['req'] === 'note_swap' && $_POST['action'] === 'note_swap_submit') {
-    // 1. รับค่า
-    $req_user_id = $_POST['req_user_id'];
-    $req_schedule_id = $_POST['req_schedule_id'];
+elseif ($req === 'note_swap' && $action === 'note_swap_submit') {
+    // [Security Fix] Input validation and sanitization
+    $req_user_id = filter_input(INPUT_POST, 'req_user_id', FILTER_VALIDATE_INT);
+    $req_schedule_id = filter_input(INPUT_POST, 'req_schedule_id', FILTER_VALIDATE_INT);
+    $target_user_id = filter_input(INPUT_POST, 'target_user_id', FILTER_VALIDATE_INT);
+    $target_schedule_id = filter_input(INPUT_POST, 'target_schedule_id', FILTER_VALIDATE_INT);
     
-    $target_user_id = $_POST['target_user_id'];
-    $target_schedule_id = $_POST['target_schedule_id'];
-    $remark = $_POST['swap_remark'];
+    $raw_remark = $_POST['swap_remark'] ?? '';
+    $safe_remark = htmlspecialchars(trim($raw_remark), ENT_QUOTES, 'UTF-8');
 
-    // 2. Insert ลงตาราง Requests
-    // หมายเหตุ: ใช้ target_user_id เก็บลงช่อง user_replace_id ได้เพื่อความสะดวกในการให้ B กดยืนยัน
-    $payload = [
-        'request_user_id' => $req_user_id,
-        'schedule_id' => $req_schedule_id,
-        'request_type_id' => 99, // สมมติ 99 คือ Note Swap
-        'request_reason' => $remark,
-        'request_status' => 'Pending',
-        'user_replace_id' => $target_user_id, 
-        'target_schedule_id' => $target_schedule_id // ถ้าตารางไม่มีช่องนี้ ให้แพ็คใส่ JSON ไว้ใน remark
-    ];
-    
-    callApi('/api/request?action=add', 'POST', $payload);
+    if ($req_user_id && $req_schedule_id && $target_user_id && $target_schedule_id) {
+        $payload = [
+            'request_user_id' => $req_user_id,
+            'schedule_id' => $req_schedule_id,
+            'request_type_id' => 99, 
+            'request_reason' => $safe_remark,
+            'request_status' => 'Pending',
+            'user_replace_id' => $target_user_id, 
+            'target_schedule_id' => $target_schedule_id 
+        ];
+        
+        callApi('/api/request?action=add', 'POST', $payload);
+    }
     
     header("Location: request_board.php");
     exit;
 }
-elseif (isset($req) && $req === "delete" && $manage_mode == 1){
+elseif ($req === "delete" && $manage_mode == 1){
     $noprocess = false;
     $target_schedule_id = filter_input(INPUT_POST, "schedule_id", FILTER_VALIDATE_INT);
-    if ($target_schedule_id !== null){ callApi("/schedule/monthschedule?action=delete&schedule_id=" . $target_schedule_id, "DELETE"); }
-    $redirect_message = false; $status = 'success'; $message = 'Successful. Deleted schedule ID : '.$target_schedule_id;
+    if ($target_schedule_id !== null && $target_schedule_id !== false){ 
+        callApi("/schedule/monthschedule?action=delete&schedule_id=" . $target_schedule_id, "DELETE"); 
+        $status = 'success'; 
+        $message = 'Successful. Deleted schedule ID : '.$target_schedule_id;
+    } else {
+        $status = 'error'; 
+        $message = 'Invalid Schedule ID';
+    }
+    $redirect_message = false; 
 }
 
 if($noprocess){
-    echo "<pre>"; echo "Error: No valid action processed.\n"; print_r($_POST); echo "</pre>"; exit;
+    echo "<pre>"; echo "Error: No valid action processed.\n"; echo "</pre>"; exit;
 } else {
     if ($redirect_message && !empty($url) && !empty($insertData)){
         $response = callApi($url, "POST", $insertData);
@@ -637,6 +623,15 @@ if($noprocess){
         $message = $response['message'] ?? 'Something went wrong';
     }   
 }
+
+// [Security Fix] Whitelist allowed Redirects & Encode output to prevent Open Redirect / XSS
+$allowed_redirects = ['schedule.php', 'request_board.php'];
+if (!in_array($redirectUrl, $allowed_redirects)) {
+    $redirectUrl = 'schedule.php';
+}
+$safe_redirect = htmlspecialchars($redirectUrl, ENT_QUOTES, 'UTF-8');
+$safe_status = ($status === 'success') ? 'success' : 'error';
+$safe_message = htmlspecialchars($message ?? 'Processing complete', ENT_QUOTES, 'UTF-8');
 ?>
 
 <!DOCTYPE html>
@@ -652,9 +647,9 @@ if($noprocess){
     </style>
 </head>
 <body>
-<div class="alert <?= $status === 'success' ? 'success' : 'error' ?>">
-    <?= htmlspecialchars($message ?? 'Processing complete') ?><br><small>Redirecting...</small>
+<div class="alert <?= $safe_status ?>">
+    <?= $safe_message ?><br><small>Redirecting...</small>
 </div>
-<script> setTimeout(function () { window.location.href = "<?= $redirectUrl ?>"; }, 2000); </script>
+<script> setTimeout(function () { window.location.href = "<?= $safe_redirect ?>"; }, 2000); </script>
 </body>
 </html>
