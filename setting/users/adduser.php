@@ -15,7 +15,10 @@ if(!hasPermission('user.user_manage')){
     exit('<div style="display:flex; justify-content:center; align-items:center; height:100vh; font-family:Sarabun;"><h1><b>Access Denied !</b></h1></div>');
 }
 
-$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+// [Security] Generate CSRF token if not exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 $csrf = $_SESSION['csrf_token'];
 
 // Fetch Dropdown Data
@@ -65,7 +68,7 @@ $teams = callApi("/get/team")['data'] ?? [];
 <div class="main-container">
     <div class="card card-profile p-4 p-md-5">
         <form action="userupdate.php" method="post">
-            <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="user_id" value="">
 
             <!-- SECTION: Basic Info -->
@@ -82,7 +85,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                     <select class="form-select form-select-sm" name="role_id" required>
                         <option value="">-- Select Role --</option>
                         <?php foreach ($roles as $role): ?>
-                            <option value="<?= htmlspecialchars($role['role_id']) ?>"><?= htmlspecialchars($role['role_name']) ?></option>
+                            <option value="<?= htmlspecialchars($role['role_id'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($role['role_name'], ENT_QUOTES, 'UTF-8') ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -94,7 +97,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                 <div class="col-md-auto"><label class="form-label d-block">คำนำหน้า</label>
                     <div class="radio-group-box d-flex gap-3">
                         <?php foreach (['นาย', 'นาง', 'น.ส.'] as $opt): ?>
-                            <div class="form-check m-0"><input class="form-check-input" type="radio" name="thai_initialname" value="<?= $opt ?>"><label class="form-check-label small"><?= $opt ?></label></div>
+                            <div class="form-check m-0"><input class="form-check-input" type="radio" name="thai_initialname" value="<?= htmlspecialchars($opt, ENT_QUOTES, 'UTF-8') ?>"><label class="form-check-label small"><?= htmlspecialchars($opt, ENT_QUOTES, 'UTF-8') ?></label></div>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -107,7 +110,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                 <div class="col-md-auto"><label class="form-label d-block">Initial</label>
                     <div class="radio-group-box d-flex gap-3">
                         <?php foreach (['Mr.', 'Mrs.', 'Ms.'] as $opt): ?>
-                            <div class="form-check m-0"><input class="form-check-input" type="radio" name="eng_initialname" value="<?= $opt ?>"><label class="form-check-label small"><?= $opt ?></label></div>
+                            <div class="form-check m-0"><input class="form-check-input" type="radio" name="eng_initialname" value="<?= htmlspecialchars($opt, ENT_QUOTES, 'UTF-8') ?>"><label class="form-check-label small"><?= htmlspecialchars($opt, ENT_QUOTES, 'UTF-8') ?></label></div>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -129,7 +132,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                     <select class="form-select form-select-sm" name="manager_id" required>
                         <option value="">-- Select Manager --</option>
                         <?php foreach ($sups as $sup): ?>
-                            <option value="<?= htmlspecialchars($sup['user_id']) ?>"><?= htmlspecialchars($sup['thai_firstname']) ." ".htmlspecialchars($sup['thai_lastname']) ?></option>
+                            <option value="<?= htmlspecialchars($sup['user_id'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($sup['thai_firstname'] . " " . $sup['thai_lastname'], ENT_QUOTES, 'UTF-8') ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -138,7 +141,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                     <select class="form-select form-select-sm" name="approver_id" required>
                         <option value="">-- Select Approver --</option>
                         <?php foreach ($sups as $sup): ?>
-                            <option value="<?= htmlspecialchars($sup['user_id']) ?>"><?= htmlspecialchars($sup['thai_firstname']) ." ".htmlspecialchars($sup['thai_lastname']) ?></option>
+                            <option value="<?= htmlspecialchars($sup['user_id'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($sup['thai_firstname'] . " " . $sup['thai_lastname'], ENT_QUOTES, 'UTF-8') ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -152,7 +155,7 @@ $teams = callApi("/get/team")['data'] ?? [];
                     <select name="team" class="form-select form-select-sm">
                         <option value="">-- No Team --</option>
                         <?php foreach ($teams as $t): ?>
-                            <option value="<?= htmlspecialchars($t['team']) ?>"><?= htmlspecialchars($t['team']) ?></option>
+                            <option value="<?= htmlspecialchars($t['team'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($t['team'], ENT_QUOTES, 'UTF-8') ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -161,12 +164,12 @@ $teams = callApi("/get/team")['data'] ?? [];
                     <select class="form-select form-select-sm" name="shift_id">
                         <option value="">--No Shift--</option>
                         <?php foreach ($shifts as $shift): ?>
-                            <option value="<?= htmlspecialchars($shift['shift_id']) ?>"><?= htmlspecialchars($shift['shift_name']) ?></option>
+                            <option value="<?= htmlspecialchars($shift['shift_id'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($shift['shift_name'], ENT_QUOTES, 'UTF-8') ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 <div class="col-md-3"><label class="form-label">Login Permission</label><select name="is_active" class="form-select form-select-sm"><option value="1">Active</option><option value="0">Inactive</option></select></div>
-                <div class="col-md-3"><label class="form-label">Scheduled Enable</label><select name="scheduled" class="form-select form-select-sm"><option value="1">Yes</option><option value="0" selected>No</option></select></div>
+                <div class="col-md-3"><label class="form-label">Scheduled Enable</label><select name="scheduled" class="form-select form-select-sm"><option value="1">Yes</option><option value="0">No</option></select></div>
             </div>
 
             <div class="footer-actions d-flex justify-content-center gap-3">
