@@ -41,6 +41,10 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
     "Accept: application/json"
 ]);
 
+// [Security Fix] Checkmarx Requirement: บังคับตรวจจับ SSL Certificate (ป้องกัน Man-in-the-Middle)
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true); 
+curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
 $response = curl_exec($ch);
 $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $err = curl_errno($ch);
