@@ -8,9 +8,19 @@ if (!checkLogin() || !$user || !$token) {
     exit();
 }
 $beurl = $_ENV['BE_API_PYBE'];
-$apiurl = "http://" . $_ENV['BE_API_PYBE'] . "/health";
-$response = file_get_contents($apiurl);
-$data = json_decode($response, true);
+
+// [Security] Validate URL before using file_get_contents
+$apiurl_base = $_ENV['BE_API_PYBE'];
+if (filter_var('http://' . $apiurl_base . '/health', FILTER_VALIDATE_URL)) {
+    $apiurl = "http://" . $apiurl_base . "/health";
+    $response = @file_get_contents($apiurl, false, stream_context_create([
+        'http' => ['timeout' => 5]
+    ]));
+    $data = !empty($response) ? json_decode($response, true) : ['status' => 'error'];
+} else {
+    error_log('Invalid API URL configuration');
+    $data = ['status' => 'error'];
+}
 
 $TodaySchUrl = "/schedule/monthschedule?action=get&schedule_date=" . date('Y-m-d') . "&user_id=" . $user["user_id"];
 $TodaySchUrlData = callApi($TodaySchUrl);
@@ -203,7 +213,7 @@ if ($TodaySchUrlData['status'] === 'success' && is_array($TodaySchUrlData['data'
                                 <li class="announcement-item">
                                     <span class="announcement-icon text-info"><?= $row['icon'] ?></span>
                                     <div class="flex-grow-1">
-                                        <p class="mb-0 small fw-medium"><b><?= htmlspecialchars($shortDetail) ?></b></p>
+                                        <p class="mb-0 small fw-medium"><b><?= htmlspecialchars($shortDetail, ENT_QUOTES, 'UTF-8') ?></b></p>
                                         <small class="text-muted">
                                             <i class="far fa-clock me-1"></i>
                                             <?= date('d M Y', strtotime($row['announce_date'])) ?>
@@ -224,12 +234,12 @@ if ($TodaySchUrlData['status'] === 'success' && is_array($TodaySchUrlData['data'
                 <h6 class="fw-bold mb-3 ms-1">Other System</h6>
                 <div class="d-flex overflow-auto gap-3 pb-3">
                     <a href="https://findi.intra.ais/ic360/login.html" class="system-link text-dark" target="_blank"><i class="fas fa-phone me-2" style="color: #034fd3;"></i> IC360</a>
-                    <a href="https://wd3.myworkday.com/ais/d/home.htmld" class="system-link text-dark" target="_blank"><i class="fas fa-address-card me-2" style="color:rgb(19, 151, 41);"></i> WorkDi</a>
-                    <a href="https://tts.intra.ais/helpdesk-support/internal-feedback" class="system-link text-dark" target="_blank"><i class="fas fa-laptop-code me-2" style="color:rgb(19, 151, 41);"></i> KeyDi</a>
+                    <a href="https://wd3.myworkday.com/ais/d/home.htmld" class="system-link text-dark" target="_blank"><i class="fas fa-address-card me-2" style="color:rgb(19, 151, 41);"></i> Workday</a>
+                    <a href="https://tts.intra.ais/helpdesk-support/internal-feedback" class="system-link text-dark" target="_blank"><i class="fas fa-laptop-code me-2" style="color:rgb(19, 151, 41);"></i> Feedback</a>
                     <a href="https://mimotech.identitynow.com/ui/d/mysailpoint" class="system-link text-dark" target="_blank"><i class="fas fa-fingerprint me-2" style="color: #034fd3;"></i> IAM</a>
                     <a href="https://learndi.ais.co.th/" class="system-link text-dark" target="_blank"><i class="fas fa-book me-2" style="color:rgb(213, 216, 13);"></i> LearnDi</a>
                     <a href="https://3bbnoc.triplet.co.th/" class="system-link text-dark" target="_blank"><i class="fas fa-solid fa-toolbox me-2" style="color:rgb(235, 150, 40);"></i> Helpdesk</a>
-                    <a href="https://noc3bb.triplet.co.th/" class="system-link text-dark" target="_blank"><i class="fas fa-solid fa-hexagon-nodes-bolt me-2" style="color:rgb(47, 216, 13);"></i> Network</a>
+                    <a href="https://noc3bb.triplet.co.th/" class="system-link text-dark" target="_blank"><i class="fas fa-solid fa-hexagon-nodes-bolt me-2" style="color:rgb(47, 216, 13);"></i> NOC</a>
                 </div>
             </div>
 
@@ -284,10 +294,10 @@ if ($TodaySchUrlData['status'] === 'success' && is_array($TodaySchUrlData['data'
 
                         <?php foreach ($todayEvent as $ev): ?>
                             <div class="mb-2 p-2 rounded" style="background: rgba(255,255,255,0.05);">
-                                <div><b> Work Schedule : <?= htmlspecialchars($ev['type_name'] ?? '-') ?></b> | <b> Work Group : <?= htmlspecialchars($ev['work_group'] ?? '-') ?></b></div>
+                                <div><b> Work Schedule : <?= htmlspecialchars($ev['type_name'] ?? '-', ENT_QUOTES, 'UTF-8') ?></b> | <b> Work Group : <?= htmlspecialchars($ev['work_group'] ?? '-', ENT_QUOTES, 'UTF-8') ?></b></div>
                                 
                                 <div class="opacity-75">
-                                    <?= htmlspecialchars($ev['work_group_desc'] ?? '-') ?>
+                                    <?= htmlspecialchars($ev['work_group_desc'] ?? '-', ENT_QUOTES, 'UTF-8') ?>
                                 </div>
 
                                 <div>Time :
@@ -304,14 +314,14 @@ if ($TodaySchUrlData['status'] === 'success' && is_array($TodaySchUrlData['data'
                     <?php endif; ?>
                 </div>
             </div>
-            <?php if(hasPermission('index.admindebug')){ ?>
+            <!-- [Security] Only show admin debug info in development environment -->
+            <?php if(hasPermission('index.admindebug') && isset($_ENV['SERVER']) && $_ENV['SERVER'] === 'Development'){ ?>
             <div class="glass-card bg-dark text-white shadow-lg">
                 <h6 class="text-warning fw-bold mb-3"><i class="fas fa-user-shield me-2"></i> Admin Debug</h6>
                 <div style="font-size: 0.75rem; font-family: monospace;" class="opacity-75">
                     <p class="mb-1">API: <?= e($beurl) ?></p>
                     <p class="mb-1">HEALTH: <?= e($data['status'] ?? '-') ?></p>
-                    <p class="mb-0 text-truncate">ROOT: <?= e($_ENV['DOC_ROOT']) ?></p>
-                    <pre><?= e(print_r($user, true)) ?></pre>
+                    <p class="mb-0 text-truncate">ROOT: <?= e($_ENV['DOC_ROOT'] ?? 'N/A') ?></p>
                 </div>
             </div>
             <?php } ?>
